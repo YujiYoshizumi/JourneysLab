@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<menu xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto">
+
+    <!-- トップバー右上のカートアイコン -->
+    <item
+        android:id="@+id/action_cart"
+        android:icon="@drawable/ic_cart"
+        android:title="@string/menu_cart"
+        app:showAsAction="always" />
+
+    <!-- オーバーフローメニュー。「カート」はカートアイコンとは別の経路になる。 -->
+    <item
+        android:id="@+id/action_overflow_cart"
+        android:title="@string/menu_cart"
+        app:showAsAction="never" />
+
+    <item
+        android:id="@+id/action_overflow_about"
+        android:title="@string/menu_about"
+        app:showAsAction="never" />
+
+</menu>

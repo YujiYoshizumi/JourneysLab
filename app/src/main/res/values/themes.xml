@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- 実行ごとの見た目のばらつきを避けるため、端末のダークテーマ設定に追従せずライトで固定する。 -->
+    <style name="Theme.JourneyLab" parent="Theme.Material3.Light.NoActionBar">
+        <item name="colorPrimary">@color/brand_primary</item>
+        <item name="colorOnPrimary">@color/brand_on_primary</item>
+    </style>
+
+</resources>

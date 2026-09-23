@@ -1,0 +1,5 @@
+case_id,build,model_tier,expected
+J01,clean,high,PASS
+J01,B01,high,FAIL
+J01,clean,low,PASS
+J01,B01,low,FAIL

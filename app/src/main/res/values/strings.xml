@@ -1,0 +1,32 @@
+<resources>
+    <string name="app_name">JourneyLab</string>
+
+    <!-- トップバー -->
+    <string name="menu_cart">カート</string>
+    <string name="menu_about">このアプリについて</string>
+    <string name="about_title">JourneyLab サンプルアプリ</string>
+    <string name="about_message">オフラインの簡易ショップアプリです。</string>
+    <string name="about_close">閉じる</string>
+    <string name="navigate_up">戻る</string>
+
+    <!-- ホーム -->
+    <string name="home_heading">本日のおすすめ</string>
+
+    <!-- 商品詳細 -->
+    <string name="detail_add_to_cart">カートに追加</string>
+    <string name="detail_added_to_cart">カートに追加しました</string>
+
+    <!-- カート -->
+    <string name="cart_title">カート</string>
+    <string name="cart_quantity">数量 %1$d</string>
+    <string name="cart_subtotal">小計 %1$s</string>
+    <string name="cart_total">合計 %1$s</string>
+    <string name="cart_checkout">注文する</string>
+    <string name="cart_empty">カートは空です</string>
+
+    <!-- 注文完了 -->
+    <string name="order_complete_title">注文完了</string>
+    <string name="order_complete_message">ご注文ありがとうございました</string>
+    <string name="order_number">注文番号 %1$s</string>
+    <string name="order_complete_back_home">ホームに戻る</string>
+</resources>

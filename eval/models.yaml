@@ -1,0 +1,19 @@
+# 被験エージェントは1種類に固定し、モデルだけを切り替える。
+# エージェントまで変えると、差がモデルによるものか実装によるものか切り分けられない。
+agent: claude-code
+
+# エージェントのヘッドレス実行コマンド。
+#   {prompt} … eval/agent_prompt.txt の置換後の文字列
+#   {model}  … 下の tiers.<ティア>.model
+# オプションは Claude Code の `claude --help` で確認したものだけを使う。
+#   -p / --print              ヘッドレス実行
+#   --output-format json      結果を JSON で受け取る（実際に使われたモデル ID を含む）
+#   --model                   使用するモデルの指定
+#   --allowed-tools           使わせるツールの限定（汚染防止）
+command: ["claude", "-p", "{prompt}", "--output-format", "json", "--model", "{model}", "--permission-mode", "acceptEdits", "--allowed-tools", "Bash(adb:*) Bash(android:*) Read Write Glob"]
+
+tiers:
+  high:
+    model: claude-opus-5
+  low:
+    model: claude-haiku-4-5-20251001

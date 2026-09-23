@@ -1,0 +1,38 @@
+# ---------------------------------------------------------------------------
+# JourneyLab — 公開するのはソースと評価スクリプトのみ。
+# ビルド生成物・実行結果（録画やスクリーンショットを含む）は追跡しない。
+# ---------------------------------------------------------------------------
+
+# Gradle / Android のビルド生成物
+build/
+.gradle/
+.kotlin/
+/captures/
+.cxx/
+.externalNativeBuild/
+*.apk
+*.aab
+*.hprof
+
+# ローカル環境に依存する設定（SDK のパスなどが入る）
+local.properties
+
+# 評価の実行結果（録画・スクリーンショット・logcat で数百 MB になる）
+#   eval/reports/ は集計済みのレポートなので追跡する
+/eval/results/
+/eval/apks/
+/eval/workdir/
+
+# 実装・再実行の指示用プロンプト（公開しない）
+/journeylab_implementation_prompt.md
+/journeylab_rerun_prompt.md
+
+# Python
+__pycache__/
+*.py[cod]
+
+# IDE / OS
+.idea/
+.vscode/
+*.iml
+.DS_Store

@@ -1,0 +1,11 @@
+# 既定はテキストとして扱い、リポジトリ内では LF に正規化する
+* text=auto eol=lf
+
+# Windows 用のバッチファイルは CRLF
+*.bat text eol=crlf
+
+# バイナリ
+*.jar   binary
+*.webp  binary
+*.png   binary
+*.mp4   binary

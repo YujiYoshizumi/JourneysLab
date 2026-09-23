@@ -1,0 +1,14 @@
+Android CLI の Journeys スキルに従って、次の Journey ファイルを接続中のデバイスで実行してください。
+
+Journey ファイル: {JOURNEY_FILE}
+対象アプリのパッケージ名: {PACKAGE_NAME}
+
+実行後、結果を次の形式の JSON だけで出力してください。JSON の前後に説明文を書かないでください。
+<<<VERDICT>>>
+{
+  "journey": "<journey 名>",
+  "results": [
+    {"action": "<ステップの文言>", "status": "PASSED|FAILED", "reasoning": "<判定理由>", "artifacts": ["<保存した画面のファイルパス>"]}
+  ]
+}
+<<<END>>>
