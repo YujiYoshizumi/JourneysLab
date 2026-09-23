@@ -3,15 +3,15 @@
 Android の Journeys（自然言語 E2E テスト）について、技術記事で次の3点を示すための検証環境です。
 
 1. **Journeys がどのようなものか** — 正常なアプリに対して Journey が成功する
-2. **AI による判定のため、見逃しが起こり得ること** — バグがあるのに同じ Journey が PASS してしまう
+2. **期待した経路の不具合が、FAIL に反映されないこと** — 経路を指定しない Journey が、別経路で目的を達成して PASS する場合がある
 3. **モデルによって結果が変わり得ること** — 同じ Journey・同じアプリでも、モデルを変えると判定が変わり得る
 
 1本の Journey（J01）を、**2種類のビルド × 2種類のモデル**で実行します。
 
 | | 正常ビルド（clean） | バグ入りビルド（B01） |
 |---|---|---|
-| 高性能モデル（high） | ① 成功例（正解 PASS） | ② 見逃し例（正解 FAIL） |
-| 低性能モデル（low） | ③（正解 PASS） | ④（正解 FAIL） |
+| 上位モデル（high） | ① 成功例（期待判定 PASS） | ② 見逃し例（期待判定 FAIL） |
+| 軽量モデル（low） | ③（期待判定 PASS） | ④（期待判定 FAIL） |
 
 - 検証結果をまとめた記事: **[docs/journeys-false-pass.md](docs/journeys-false-pass.md)**
 - 直近の実行レポート: **[eval/reports/20260922-01.md](eval/reports/20260922-01.md)**
@@ -56,7 +56,7 @@ docs/
 | Android Gradle Plugin | 9.4.1 |
 | Gradle | 9.6.0 |
 | compileSdk / targetSdk / minSdk | 37 / 37 / 29 |
-| 構成キャッシュ | `org.gradle.configuration-cache=false`（Journeys の既知の問題への対応） |
+| 構成キャッシュ | `org.gradle.configuration-cache=false`（Studio 版 Journeys の既知の問題を参考に無効化。今回の CLI 方式での必要性は未検証） |
 
 `findViewById` と Kotlin synthetics はアプリ側のコードで一切使っていません
 （`grep -rn findViewById app/src/main` は0件）。
@@ -110,10 +110,10 @@ export ANDROID_HOME="$HOME/Library/Android/sdk"
 |---|---|
 | B01 | トップバーのカートアイコンをタップしても何も起きない（ホーム画面・商品詳細画面の両方）。メニューの「カート」からは従来どおりカート画面に遷移できる |
 
-エージェントが目標（カートを開く）を達成するために別の経路（メニュー）を自ら選び、
-バグに気づかず PASS してしまう現象を再現するためのものです。
+カートアイコンが動作しなくても、別経路（メニュー）でカートを開ける構成です。
+今回の測定では、不具合の可能性を判定理由に記録しながらも、別経路で目的を達成して PASS する実行がありました。
 
-### 汚染防止
+### 情報混入を減らす工夫と限界
 
 - バグ ID・注入の有無は、画面・`contentDescription`・Logcat・アプリ名・バージョン名のどこにも出しません。
   アプリはログ出力を一切行わず、`applicationId`（`com.example.journeylab`）・アプリ名（`JourneyLab`）・
@@ -122,9 +122,16 @@ export ANDROID_HOME="$HOME/Library/Android/sdk"
 - 評価ランナーは APK を `eval/apks/<ランダムな12桁>.apk` にコピーし、ビルド名との対応表
   （`<結果ディレクトリ>/apk_map.json`）はランナー側だけが持ちます。
 - エージェントには、APK と Journey ファイルだけを置いた作業ディレクトリ
-  （`eval/workdir/<実行ID>/<ビルド>_<ティア>_<試行>/`）を渡します。ソースコードは含まれません。
-- エージェントに許可するツールは `eval/models.yaml` の `command` でデバイス操作中心に絞っています
-  （`Bash(adb:*) Bash(android:*) Read Write Glob`）。
+  （`eval/workdir/<実行ID>/<ビルド>_<ティア>_<試行>/`）を渡します。このディレクトリにアプリのソースコードは置いていません。
+- `eval/models.yaml` の `command` では、`--allowed-tools` に
+  `Bash(adb:*) Bash(android:*) Read Write Glob` を指定しています。
+  これは確認なしで実行を許可するルールであり、利用可能なツール全体を限定する設定ではありません。
+  ツール一覧を制限する `--tools` との違いは、[Claude Code の公式仕様](https://code.claude.com/docs/en/cli-reference)を参照してください。
+
+作業ディレクトリ名には `B01_high_1` や `clean_high_1` のようにビルド名が含まれ、
+エージェントが出力したファイルパスにも現れています。ビルド情報を完全に伏せた比較ではなく、
+ディレクトリ名が判定に与えた影響は未確認です。また、上記の設定だけで作業ディレクトリ外の
+ファイルへのアクセスを隔離しているわけではありません。
 
 ---
 
@@ -180,7 +187,9 @@ ANDROID_SERIAL=emulator-5554 ./eval/verify_ground_truth.sh B01    # 指定ビル
   見つけられませんでした（→「8. 未確認事項」）。
 
 **検証意図**：この Journey の書き手は、ステップ3で「カートアイコンからカートに遷移できること」も
-確認できるつもりでいる、という想定です。したがって B01 ビルドでの正解は FAIL です。
+確認できるつもりでいる、という想定です。この想定に基づき、B01 ビルドの期待判定を FAIL としています。
+ただし、J01 の記述は「カートを開く」だけで、アイコン経由には限定していません。
+書き手の期待判定と、Journey に明記した検証条件は区別します。
 
 ---
 
@@ -199,18 +208,19 @@ tiers:
 
 ### モデル ID と区分の根拠
 
-出典: Anthropic 公式のモデル一覧
-<https://platform.claude.com/docs/en/about-claude/models/overview>
+以下のモデル ID は、2026年9月22日の測定に使用した値です。提供元の説明・価格・画像入力対応は、
+各モデルの個別ページで2026年9月23日に確認しました。
 
-| ティア | モデル | Claude API ID | 同ページの記載 |
+| ティア | モデル・出典 | Claude API ID | 提供元の説明・価格（資料確認時点） |
 |---|---|---|---|
-| high | Claude Opus 5 | `claude-opus-5` | 「For complex agentic coding and enterprise work」。`$5 / input MTok, $25 / output MTok`、"If you're unsure which model to use, start with Claude Opus 5 for most workloads" |
-| low | Claude Haiku 4.5 | `claude-haiku-4-5-20251001` | 「The fastest model with near-frontier intelligence」。`$1 / input MTok, $5 / output MTok`、Comparative latency は "Fastest" |
+| high | [Claude Opus 5](https://platform.claude.com/docs/en/models/opus-5/overview) | `claude-opus-5` | 複雑なエージェント型コーディングや企業向け作業を想定。入力 `$5 / MTok`、出力 `$25 / MTok` |
+| low | [Claude Haiku 4.5](https://platform.claude.com/docs/en/models/haiku-4-5/overview) | `claude-haiku-4-5-20251001` | 高速性を特徴とするモデル。入力 `$1 / MTok`、出力 `$5 / MTok` |
 
-- 区分は**提供元のモデル区分**（上位モデル／軽量モデル）に基づきます。同ページの Description・
-  Pricing・Comparative latency の記載をそのまま根拠としており、こちらで性能を断定していません。
-- **画像入力**: 同ページに「All current models support text and image input, text output,
-  multilingual capabilities, vision, and tool use.」と明記されており、両モデルとも対応しています。
+- `high` / `low` は、提供元の Opus / Haiku の位置づけを参考にした、本リポジトリ内の比較用ラベルです。
+  今回の測定によってモデルの一般的な性能の優劣を確定したものではありません。
+- **画像入力**: 両モデルの個別ページに、テキスト・画像入力とテキスト出力への対応が記載されています。
+- **最新の推奨モデルとの関係**: [公式モデル一覧](https://platform.claude.com/docs/en/models/overview)の推奨は更新されます。
+  ここに記載したモデル ID は、今回の測定条件を示しています。
 - **モデルの切り替え方法**: Claude Code の `--model` オプション（`claude --help` で確認）。
 - **実際に使われたモデル ID**: `claude -p --output-format json` の戻り値に含まれる `modelUsage`
   のキーを記録しています（`results.csv` の `model_actual` 列）。指定と実際が食い違ったときに
@@ -223,15 +233,26 @@ tiers:
 ```bash
 # 実行部分をモックに置き換えた通し確認（デバイス不要）
 python3 eval/run_matrix.py --dry-run
-
-# 実機/エミュレータでの実行（4セル × 10回）
-python3 eval/run_matrix.py --device emulator-5554 --trials 10 --run-id 20260921-01 --clean-build
-
-# 一部だけ
-python3 eval/run_matrix.py --device emulator-5554 --builds B01 --tiers high --trials 3
 ```
 
-出力は `eval/results/<実行ID>/` に入ります。
+実機・エミュレータで実行する場合は、**対象端末だけを1台接続**し、他のエミュレータや実機は
+接続していない状態にします。`adb devices` で対象端末だけが表示されることを確認し、
+`<serial>` をその端末のシリアルに置き換えてください。
+ランナーの `--device` 指定だけでは、エージェントが別端末を選ぶことまでは防げません。
+
+```bash
+adb devices
+export ANDROID_SERIAL="<serial>"
+
+# 実機・エミュレータでの実行（4セル × 10回）
+python3 eval/run_matrix.py --device "$ANDROID_SERIAL" --trials 10 --clean-build
+
+# 一部だけ
+python3 eval/run_matrix.py --device "$ANDROID_SERIAL" --builds B01 --tiers high --trials 3
+```
+
+出力は `eval/results/<実行ID>/` に入ります。`--run-id` を省略すると、開始時刻から実行IDを生成します。
+ID を明示する場合は実行ごとに新しい値を使ってください。同じIDを再利用すると既存の結果ファイルを上書きします。
 
 | ファイル | 内容 |
 |---|---|
@@ -241,10 +262,10 @@ python3 eval/run_matrix.py --device emulator-5554 --builds B01 --tiers high --tr
 | `apk_map.json` | ビルド名と APK ファイル名の対応（ランナー側の情報） |
 | `<ビルド>/<ティア>/<試行>/` | 証跡一式（下記） |
 
-集計だけをやり直す場合:
+集計だけをやり直す場合は、`<実行ID>` を確認したい結果のIDに置き換えます。
 
 ```bash
-python3 eval/summarize.py --results eval/results/20260921-01
+python3 eval/summarize.py --results "eval/results/<実行ID>"
 ```
 
 ### 証跡（エビデンス）
@@ -307,9 +328,17 @@ Android Studio の Journeys Gradle タスクは、判定役が Gemini に固定�
 
 現在のハッシュ: `3e708d200b971d3de429bc25db4829fc4da5a5315f3ec35f418a6cbe73113198`
 
-エージェントの出力から所定の JSON を取り出せなかった場合は、PASS/FAIL ではなく `ERROR` として
-記録し、集計では PASS/FAIL と分けて数えます。Journey 全体の判定は、Journeys スキルの定義
-（全ステップが成功したときだけ成功）に従って、ステップごとの `status` から導出します。
+ランナーは、報告された手順の文言・順序を Journey XML と照合します。定義された全手順が揃い、
+すべての `status` が `PASSED` の場合にだけ Journey 全体を `PASS` とします。
+定義どおりの順序で途中の手順が `FAILED` になった場合は、後続の報告がなくても `FAIL` とします。
+JSON や判定値の不備、手順の文言・順序の不一致、成功報告の手順不足は、理由を添えて `ERROR` として
+記録し、集計では PASS/FAIL と分けて数えます。
+
+判定処理の回帰テストは、リポジトリのルートで次のように実行できます。
+
+```bash
+python3 -m unittest discover -s eval -p 'test_*.py'
+```
 
 各実行の前にアプリのデータを初期化します（`adb shell pm clear com.example.journeylab`）。
 アプリの起動はランナーが `am start` で行うため、Journey 側に起動ステップは不要です。
@@ -324,10 +353,10 @@ Android Studio の Journeys Gradle タスクは、判定役が Gemini に固定�
 全セクション（判定内訳／見逃し率・誤検知率／モデル間の差／FAIL ステップの分布／ステップ3の
 経路の記録欄／証跡の欠損／ERROR の内訳）が埋まることを確認しています。
 
-**実機での実行**（実行ID `20260922-01`、Pixel 10 / Android 17 / API 37 エミュレータ、
+**エミュレータでの実行**（実行ID `20260922-01`、ランナーの対象は Pixel 10 / Android 17 / API 37、
 4セル × 10回 = 40実行、1時間24分40秒）:
 
-| ビルド | モデル | 正解 | PASS | FAIL | ERROR | 一貫性 |
+| ビルド | モデル | 期待判定 | PASS | FAIL | ERROR | 一貫性 |
 |---|---|---|---|---|---|---|
 | clean | high | PASS | 10 | 0 | 0 | 100% |
 | clean | low | PASS | 7 | 1 | 2 | 70% |
@@ -339,8 +368,20 @@ Android Studio の Journeys Gradle タスクは、判定役が Gemini に固定�
 - ERROR 率: high 0.0% (0/20) / low 40.0% (8/20)
 - 証跡（録画・スクリーンショット・エージェント出力・logcat）の欠損: **0 件 / 40 件**
 
+「期待判定」は `eval/expected_matrix.csv` に設定した値です。B01 の FAIL は、J01 に明記していない
+「カートアイコン経由でカートを開けること」という書き手の期待に基づくもので、Journey の記述だけから
+導かれる唯一の正解ではありません。「見逃し率」はこの期待に対する乖離の割合です。
+
 指定したモデル ID と実際に使われたモデル ID は全40実行で一致していました。
 判定理由の引用を含む詳細は **[`eval/reports/20260922-01.md`](eval/reports/20260922-01.md)** にあります。
+
+**端末条件の逸脱**: ランナーの対象は `emulator-5554` でしたが、`B01/low` の trial 4（FAIL）・
+trial 5（ERROR）では、エージェントが `emulator-5556` にもタップ・画面取得を行っていました。
+別端末側のビルドや初期状態が同じ条件だったか、判定にどう影響したかは未確認です。
+上記の集計はこの2件を含む当時の記録であり、モデル間の差をモデル単独の効果とは断定できません。
+「証跡の欠損0件」は、所定の4種類のファイルが揃っていることを示す値です。
+録画・定点スクリーンショット・logcat は `emulator-5554` が取得対象であり、
+別端末への操作まで同じ証跡で記録できていることは示していません。
 
 #### 既知の問題（証跡の取得）
 
@@ -353,10 +394,14 @@ Android Studio の Journeys Gradle タスクは、判定役が Gemini に固定�
 
 ## 7. 再実行
 
-過去の実行と比較できる形で測り直すための手順です。
+再測定の条件を記録し、過去の結果と照合するための手順です。
+過去の測定で起きた別端末への操作を避けるため、対象端末だけを1台接続します。
+この端末条件の変更も記録してください。`<serial>` は `adb devices` で確認した値に置き換えます。
 
 ```bash
-python3 eval/run_matrix.py --device <serial> --trials 10 --run-id <YYYYMMDD-NN> --clean-build
+adb devices
+export ANDROID_SERIAL="<serial>"
+python3 eval/run_matrix.py --device "$ANDROID_SERIAL" --trials 10 --clean-build
 ```
 
 **実行前に確認すること**
@@ -374,7 +419,7 @@ python3 eval/run_matrix.py --device <serial> --trials 10 --run-id <YYYYMMDD-NN> 
 
 **そのほかの注意**
 
-- `--run-id` を実行ごとに分ける（結果が `eval/results/<実行ID>/` に隔離される）
+- `--run-id` は省略して自動生成する。明示する場合も過去のIDを再利用しない（同じIDでは結果ファイルが上書きされる）
 - `--clean-build` を付けてビルドキャッシュの影響を避ける
 - **実際に使われたモデル ID は、こちらが何もしなくても更新されることがあります。**
   結果が前回と食い違ったときは、まず `model_actual` 列を疑ってください
@@ -395,15 +440,21 @@ python3 eval/run_matrix.py --device <serial> --trials 10 --run-id <YYYYMMDD-NN> 
 
 ### 公式の情報源で確認できたこと
 
-| 事項 | 情報源 |
+Android Studio 版と、本プロジェクトの CLI・エージェント方式は実行の仕組みが異なります。
+下表の AGP 要件・構成キャッシュ・権限の自動付与は **Android Studio 版についての説明**です。
+今回の CLI 方式での AGP の最低バージョンや構成キャッシュの影響は検証していません。
+アプリの起動はランナーの `am start` が担当し、ランナー自体には権限を一括付与する処理はありません。
+
+| 事項・適用範囲 | 情報源 |
 |---|---|
 | Journey XML の形式（`<journey name>` / `<description>` / `<actions>` / `<action>`）と、全ステップ成功時のみ成功という判定規則 | Android CLI の Journeys スキル `references/journeys.md` |
-| 「アプリを起動する」ステップは不要 | developer.android.com/studio/gemini/journeys |
-| AGP 9.0.0 以上が必要 | 同上 |
-| 構成キャッシュ有効時の既知の問題（別の Journey が実行される・認証エラー） | 同上（Known issues） |
-| 実行時にアプリの全権限が自動付与される | 同上（Known issues） |
-| Android CLI に Journey 実行専用のサブコマンドが無いこと | `android help` の出力 |
-| モデル ID・画像入力対応・モデルの区分 | <https://platform.claude.com/docs/en/about-claude/models/overview> |
+| Android Studio 版: 「アプリを起動する」ステップは不要 | [Journeys for Android Studio](https://developer.android.com/studio/gemini/journeys) |
+| Android Studio 版: Journey を実行するプロジェクトに AGP 9.0.0 以上が必要 | 同上 |
+| Android Studio 版: 構成キャッシュ有効時の既知の問題と、無効化による回避策 | 同上（Known issues） |
+| Android Studio 版: テスト時の権限の自動付与 | 同上（Known issues） |
+| 測定に使用した Android CLI `1.0.16261425` に Journey 実行専用のサブコマンドが無いこと | `android help` の出力 |
+| モデル ID・画像入力対応・モデルの区分（資料確認日: 2026年9月23日） | [Opus 5](https://platform.claude.com/docs/en/models/opus-5/overview)、[Haiku 4.5](https://platform.claude.com/docs/en/models/haiku-4-5/overview) |
+| `--allowed-tools` は確認なしで実行を許可するルール、`--tools` は利用可能な組み込みツールの一覧を制限する指定 | [Claude Code CLI reference](https://code.claude.com/docs/en/cli-reference) |
 | モデルの切り替え方法（`--model`）、ヘッドレス実行（`-p`）、実モデル ID の取得（`--output-format json` の `modelUsage`） | `claude --help` と、その戻り値の実測 |
 | `screenrecord` の時間上限（既定 180 秒、`--time-limit 0` で無制限） | 実行環境の `adb shell screenrecord --help` |
 

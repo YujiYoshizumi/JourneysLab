@@ -37,6 +37,7 @@ import subprocess
 import sys
 import time
 import uuid
+import xml.etree.ElementTree as ET
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
 
@@ -217,6 +218,15 @@ VERDICT_BLOCK = re.compile(r"<<<VERDICT>>>(.*?)<<<END>>>", re.DOTALL)
 JSON_BLOCK = re.compile(r"\{.*\}", re.DOTALL)
 
 
+def load_journey_actions(path: pathlib.Path) -> list[str]:
+    """Journey XML から、定義された順序で手順の文言を読む。"""
+    root = ET.parse(path).getroot()
+    actions = ["".join(action.itertext()).strip() for action in root.findall("./actions/action")]
+    if root.tag != "journey" or not actions or any(not action for action in actions):
+        raise ValueError(f"Journey に有効な手順が定義されていません: {path}")
+    return actions
+
+
 def extract_verdict(text: str) -> dict | None:
     """エージェントの出力から所定の JSON を取り出す。"""
     if not text:
@@ -247,7 +257,7 @@ def normalize_steps(payload: dict, workdir: pathlib.Path, t0_epoch: float) -> li
     steps = []
     for index, item in enumerate(raw, start=1):
         if not isinstance(item, dict):
-            continue
+            return []
         artifacts = item.get("artifacts") or []
         if not isinstance(artifacts, list):
             artifacts = [str(artifacts)]
@@ -277,14 +287,30 @@ def normalize_steps(payload: dict, workdir: pathlib.Path, t0_epoch: float) -> li
     return steps
 
 
-def derive_verdict(steps: list) -> str:
-    """Journeys スキルの定義どおり、全ステップが成功したときだけ PASS。"""
+def derive_verdict(steps: list, expected_actions: list[str]) -> tuple[str, str]:
+    """Journey 定義と報告を照合し、全体の判定と入力不備の理由を返す。"""
+    if not expected_actions:
+        return "ERROR", "Journey に手順が定義されていません"
     if not steps:
-        return "ERROR"
-    statuses = {step["status"] for step in steps}
-    if not statuses.issubset({"PASSED", "FAILED"}):
-        return "ERROR"
-    return "PASS" if statuses == {"PASSED"} else "FAIL"
+        return "ERROR", "有効なステップの判定結果を取り出せませんでした"
+    if len(steps) > len(expected_actions):
+        return "ERROR", f"報告された手順数が Journey 定義を超えています（{len(steps)}/{len(expected_actions)}）"
+
+    for index, (step, expected_action) in enumerate(zip(steps, expected_actions), start=1):
+        if step.get("index") != index:
+            return "ERROR", f"ステップ{index}の番号が連続していません"
+        action = " ".join(str(step.get("action", "")).split())
+        if action != " ".join(expected_action.split()):
+            return "ERROR", f"ステップ{index}の文言または順序が Journey 定義と一致しません"
+        if step.get("status") not in {"PASSED", "FAILED"}:
+            return "ERROR", f"ステップ{index}の status が PASSED / FAILED ではありません"
+
+    # 失敗した手順までの報告でも、Journey 全体の失敗は確定できる。
+    if any(step["status"] == "FAILED" for step in steps):
+        return "FAIL", ""
+    if len(steps) < len(expected_actions):
+        return "ERROR", f"成功と報告された手順が不足しています（{len(steps)}/{len(expected_actions)}）"
+    return "PASS", ""
 
 
 def first_failed_step(steps: list):
@@ -355,9 +381,7 @@ class MockRunner:
             return f"mock-{tier}"
 
     def execute_mock(self, cell: Cell, journey_path: pathlib.Path, workdir: pathlib.Path) -> dict:
-        actions = re.findall(
-            r"<action>\s*(.*?)\s*</action>", journey_path.read_text(encoding="utf-8"), re.DOTALL
-        )
+        actions = load_journey_actions(journey_path)
         roll = self.random.random()
         # 低性能ティアのほうが ERROR と見逃しを多く出す、という作り物の傾向を入れておく
         error_rate = 0.05 if cell.model_tier == "low" else 0.02
@@ -407,6 +431,50 @@ def make_workdir(base: pathlib.Path, cell: Cell, trial: int, apk: pathlib.Path) 
     return workdir
 
 
+def display_path(path: pathlib.Path) -> str:
+    """結果に記録するパス。リポジトリ内なら相対、外なら絶対で表す。"""
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
+
+
+def error_result(
+    cell: Cell,
+    trial: int,
+    runner,
+    prompt_sha: str,
+    started_at: datetime.datetime,
+    evidence_dir: pathlib.Path,
+    message: str,
+) -> RunResult:
+    """試行を開始できなかった場合に、ERROR として記録するための結果を作る。"""
+    return RunResult(
+        case_id=cell.case_id,
+        build=cell.build,
+        model_tier=cell.model_tier,
+        trial=trial,
+        expected=cell.expected,
+        verdict="ERROR",
+        agent=runner.agent,
+        agent_version=runner.version,
+        model_requested=runner.model_for(cell.model_tier),
+        model_actual="",
+        prompt_sha256=prompt_sha,
+        started_at=started_at.isoformat(timespec="seconds"),
+        duration_sec=0.0,
+        evidence_dir=display_path(evidence_dir),
+        recording_files="",
+        screenshot_count=0,
+        logcat_captured=False,
+        recording_captured=False,
+        failed_step_index=0,
+        failed_step_action="",
+        steps=[],
+        error=message,
+    )
+
+
 def execute_cell_once(
     cell: Cell,
     trial: int,
@@ -421,11 +489,21 @@ def execute_cell_once(
 ) -> RunResult:
     journey_name = f"{cell.case_id}.journey.xml"
     workdir = make_workdir(workdir_base, cell, trial, apk)
+    journey_path = workdir / journey_name
     evidence_dir = results_dir / cell.build / cell.model_tier / f"{trial:02d}"
     evidence_dir.mkdir(parents=True, exist_ok=True)
 
     started_at = datetime.datetime.now()
     t0 = time.time()
+
+    try:
+        expected_actions = load_journey_actions(journey_path)
+    except (ValueError, ET.ParseError, OSError) as exc:
+        # Journey が読めない場合、この試行だけを ERROR として記録し、残りの実行は続ける。
+        return error_result(
+            cell, trial, runner, prompt_sha, started_at, evidence_dir,
+            f"Journey を読み込めませんでした: {exc}",
+        )
 
     recorder = None
     shotter = None
@@ -438,7 +516,7 @@ def execute_cell_once(
         (evidence_dir / "shots" / "0001_00000000ms.png").write_bytes(b"dry-run")
         (evidence_dir / "logcat.txt").write_text("dry-run\n", encoding="utf-8")
         logcat_ok = True
-        payload = runner.execute_mock(cell, JOURNEY_DIR / journey_name, workdir)
+        payload = runner.execute_mock(cell, journey_path, workdir)
         error = payload.pop("__error__", "")
         stdout = json.dumps(payload, ensure_ascii=False)
         envelope = {"result": f"<<<VERDICT>>>{stdout}<<<END>>>",
@@ -498,9 +576,9 @@ def execute_cell_once(
 
     payload = extract_verdict(agent_text)
     steps = normalize_steps(payload, workdir, t0) if payload else []
-    verdict = derive_verdict(steps)
+    verdict, verdict_error = derive_verdict(steps, expected_actions)
     if verdict == "ERROR" and not error:
-        error = "所定の JSON を取り出せませんでした"
+        error = verdict_error
 
     failed_index, failed_action = first_failed_step(steps)
 
@@ -542,7 +620,7 @@ def execute_cell_once(
         prompt_sha256=prompt_sha,
         started_at=started_at.isoformat(timespec="seconds"),
         duration_sec=round(duration, 2),
-        evidence_dir=str(evidence_dir.relative_to(ROOT)),
+        evidence_dir=display_path(evidence_dir),
         recording_files=";".join(recording_files),
         screenshot_count=len(shots),
         logcat_captured=logcat_ok,
